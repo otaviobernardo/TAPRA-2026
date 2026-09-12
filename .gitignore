@@ -1,0 +1,16 @@
+# Azure Functions
+local.settings.json
+bin/
+obj/
+appsettings.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
