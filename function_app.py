@@ -21,8 +21,6 @@ conn_str_source = (
     "Connection Timeout=30;"
 )
 
-error_log = logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
-
 @app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
               use_monitor=False) 
 def extract_analista(myTimer:func.TimerRequest) -> None:
@@ -45,7 +43,7 @@ def extract_analista(myTimer:func.TimerRequest) -> None:
             
             
     except Exception as e:
-        error_log
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
 @app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
               use_monitor=False) 
@@ -69,7 +67,7 @@ def extract_categoria(myTimer:func.TimerRequest) -> None:
             
             
     except Exception as e:
-        error_log
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
 @app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
               use_monitor=False) 
@@ -93,7 +91,7 @@ def extract_chamado(myTimer:func.TimerRequest) -> None:
             
             
     except Exception as e:
-        error_log
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
 @app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
               use_monitor=False) 
@@ -117,7 +115,7 @@ def extract_chamado_sla(myTimer:func.TimerRequest) -> None:
             
             
     except Exception as e:
-        error_log
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
 @app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
               use_monitor=False) 
@@ -141,7 +139,7 @@ def extract_chamado_status_hist(myTimer:func.TimerRequest) -> None:
             
             
     except Exception as e:
-        error_log
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
 @app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
               use_monitor=False) 
@@ -165,7 +163,103 @@ def extract_cliente_organizacao(myTimer:func.TimerRequest) -> None:
             
             
     except Exception as e:
-        error_log
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
+
+@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
+              use_monitor=False) 
+def extract_csat_avaliacao(myTimer:func.TimerRequest) -> None:
+    try:
+        conn = pyodbc.connect(
+            conn_str_source,
+            timeout=30
+        )
+
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM itsm.csat_avaliacao")
+
+        row = cursor.fetchone()
+        
+        if row:
+            logging.info(f"Avaliação CSAT encontrada: {row[0]}")
+        else:
+            logging.info("Nenhuma avaliação CSAT encontrada.")
+            
+            
+    except Exception as e:
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
+
+@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
+              use_monitor=False) 
+def extract_fila(myTimer:func.TimerRequest) -> None:
+    try:
+        conn = pyodbc.connect(
+            conn_str_source,
+            timeout=30
+        )
+
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM itsm.fila")
+
+        row = cursor.fetchone()
+        
+        if row:
+            logging.info(f"Fila encontrada: {row[0]}")
+        else:
+            logging.info("Nenhuma fila encontrada.")
+            
+            
+    except Exception as e:
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
+
+@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
+              use_monitor=False) 
+def extract_sla(myTimer:func.TimerRequest) -> None:
+    try:
+        conn = pyodbc.connect(
+            conn_str_source,
+            timeout=30
+        )
+
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM itsm.sla")
+
+        row = cursor.fetchone()
+        
+        if row:
+            logging.info(f"SLA encontrado: {row[0]}")
+        else:
+            logging.info("Nenhum SLA encontrado.")
+            
+            
+    except Exception as e:
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
+
+@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
+              use_monitor=False) 
+def extract_solicitante(myTimer:func.TimerRequest) -> None:
+    try:
+        conn = pyodbc.connect(
+            conn_str_source,
+            timeout=30
+        )
+
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM itsm.solicitante")
+
+        row = cursor.fetchone()
+        
+        if row:
+            logging.info(f"Solicitante encontrado: {row[0]}")
+        else:
+            logging.info("Nenhum solicitante encontrado.")
+            
+            
+    except Exception as e:
+        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
 if __name__ == "__main__":
     extract_chamado(func.TimerRequest)
