@@ -1,11 +1,18 @@
-import azure.functions as func
+import base64
+import datetime
+import decimal
+import json
+import logging
 import os
-import logging 
+import uuid
+
+import azure.functions as func
 import pyodbc
+from azure.storage.blob import BlobServiceClient, ContentSettings
 
 app = func.FunctionApp()
 
-host_sql =  os.getenv("HOST")
+host_sql = os.getenv("HOST")
 database_sql = os.getenv("DATABASE")
 user_sql = os.getenv("USER")
 password_sql = os.getenv("PASSWORD")
@@ -21,245 +28,117 @@ conn_str_source = (
     "Connection Timeout=30;"
 )
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_analista(myTimer:func.TimerRequest) -> None:
+# Destino: Data Lake (Storage Account com namespace hierarquico)
+DATALAKE_CONNECTION_STRING = os.getenv("DATALAKE_CONNECTION_STRING")
+BRONZE_CONTAINER = os.getenv("BRONZE_CONTAINER", "bronze")
+FONTE = "itsm"
+
+# Frequencia de extracao (a cada hora, no minuto 0)
+SCHEDULE = "0 0 * * * *"
+
+
+def _json_default(valor):
+    """Converte tipos retornados pelo pyodbc que o json nao serializa nativamente."""
+    if isinstance(valor, (datetime.datetime, datetime.date, datetime.time)):
+        return valor.isoformat()
+    if isinstance(valor, decimal.Decimal):
+        return str(valor)
+    if isinstance(valor, uuid.UUID):
+        return str(valor)
+    if isinstance(valor, (bytes, bytearray)):
+        return base64.b64encode(valor).decode("ascii")
+    raise TypeError(f"Tipo nao serializavel: {type(valor)}")
+
+
+def _montar_caminho(entidade: str, momento: datetime.datetime) -> str:
+    """itsm/<entidade>/ano=YYYY/mes=MM/dia=DD/<entidade>_YYYYMMDDTHHMMSSZ.json"""
+    return (
+        f"{FONTE}/{entidade}/"
+        f"ano={momento:%Y}/mes={momento:%m}/dia={momento:%d}/"
+        f"{entidade}_{momento:%Y%m%dT%H%M%SZ}.json"
+    )
+
+
+def extract_to_bronze(tabela: str, entidade: str) -> None:
+    """Le a tabela inteira do banco de origem e grava como JSON no container bronze."""
+    momento = datetime.datetime.now(datetime.timezone.utc)
+
     try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
-
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM itsm.analista")
-
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"Analista encontrado: {row[0]}")
-        else:
-            logging.info("Nenhum analista encontrado.")
-            
-            
+        conn = pyodbc.connect(conn_str_source, timeout=30)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT * FROM {FONTE}.{tabela}")
+            colunas = [col[0] for col in cursor.description]
+            registros = [dict(zip(colunas, row)) for row in cursor.fetchall()]
+        finally:
+            conn.close()
     except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
+        logging.error(f"[{entidade}] Erro ao extrair dados de {FONTE}.{tabela}: {e}")
+        return
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_categoria(myTimer:func.TimerRequest) -> None:
+    conteudo = json.dumps(registros, default=_json_default, ensure_ascii=False)
+    caminho = _montar_caminho(entidade, momento)
+
     try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
+        service = BlobServiceClient.from_connection_string(DATALAKE_CONNECTION_STRING)
+        blob = service.get_blob_client(container=BRONZE_CONTAINER, blob=caminho)
+        blob.upload_blob(
+            conteudo.encode("utf-8"),
+            overwrite=True,
+            content_settings=ContentSettings(content_type="application/json"),
         )
-
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM itsm.categoria")
-
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"Categoria encontrada: {row[0]}")
-        else:
-            logging.info("Nenhuma categoria encontrada.")
-            
-            
     except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
+        logging.error(f"[{entidade}] Erro ao gravar no Data Lake ({BRONZE_CONTAINER}/{caminho}): {e}")
+        return
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_chamado(myTimer:func.TimerRequest) -> None:
-    try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
+    logging.info(f"[{entidade}] {len(registros)} registro(s) gravado(s) em {BRONZE_CONTAINER}/{caminho}")
 
-        cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM itsm.chamado")
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_analista(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("analista", "analistas")
 
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"Chamado encontrado: {row[0]}")
-        else:
-            logging.info("Nenhum chamado encontrado.")
-            
-            
-    except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_chamado_sla(myTimer:func.TimerRequest) -> None:
-    try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_categoria(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("categoria", "categorias")
 
-        cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM itsm.chamado_sla")
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_chamado(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("chamado", "chamados")
 
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"SLA de chamado encontrado: {row[0]}")
-        else:
-            logging.info("Nenhum SLA de chamado encontrado.")
-            
-            
-    except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_chamado_status_hist(myTimer:func.TimerRequest) -> None:
-    try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_chamado_sla(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("chamado_sla", "chamados_sla")
 
-        cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM itsm.chamado_status_historico")
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_chamado_status_hist(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("chamado_status_historico", "chamados_status_historico")
 
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"Status do chamado encontrado: {row[0]}")
-        else:
-            logging.info("Nenhum status do chamado encontrado.")
-            
-            
-    except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_cliente_organizacao(myTimer:func.TimerRequest) -> None:
-    try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_cliente_organizacao(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("cliente_organizacao", "clientes_organizacao")
 
-        cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM itsm.cliente_organizacao")
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_csat_avaliacao(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("csat_avaliacao", "csat_avaliacoes")
 
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"Organização do cliente encontrada: {row[0]}")
-        else:
-            logging.info("Nenhuma organização do cliente encontrada.")
-            
-            
-    except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_csat_avaliacao(myTimer:func.TimerRequest) -> None:
-    try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_fila(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("fila", "filas")
 
-        cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM itsm.csat_avaliacao")
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_sla(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("sla", "slas")
 
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"Avaliação CSAT encontrada: {row[0]}")
-        else:
-            logging.info("Nenhuma avaliação CSAT encontrada.")
-            
-            
-    except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_fila(myTimer:func.TimerRequest) -> None:
-    try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
-
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM itsm.fila")
-
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"Fila encontrada: {row[0]}")
-        else:
-            logging.info("Nenhuma fila encontrada.")
-            
-            
-    except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_sla(myTimer:func.TimerRequest) -> None:
-    try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
-
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM itsm.sla")
-
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"SLA encontrado: {row[0]}")
-        else:
-            logging.info("Nenhum SLA encontrado.")
-            
-            
-    except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False) 
-def extract_solicitante(myTimer:func.TimerRequest) -> None:
-    try:
-        conn = pyodbc.connect(
-            conn_str_source,
-            timeout=30
-        )
-
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM itsm.solicitante")
-
-        row = cursor.fetchone()
-        
-        if row:
-            logging.info(f"Solicitante encontrado: {row[0]}")
-        else:
-            logging.info("Nenhum solicitante encontrado.")
-            
-            
-    except Exception as e:
-        logging.error(f"Erro ao conectar ou executar no banco de dados: {e}")
-
-if __name__ == "__main__":
-    extract_chamado(func.TimerRequest)
+@app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
+def extract_solicitante(myTimer: func.TimerRequest) -> None:
+    extract_to_bronze("solicitante", "solicitantes")
