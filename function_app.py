@@ -14,7 +14,7 @@ app = func.FunctionApp()
 
 host_sql = os.getenv("HOST")
 database_sql = os.getenv("DATABASE")
-user_sql = os.getenv("USER")
+user_sql = os.getenv("SQL_USER")
 password_sql = os.getenv("PASSWORD")
 
 conn_str_source = (
@@ -59,7 +59,7 @@ def _montar_caminho(entidade: str, momento: datetime.datetime) -> str:
     )
 
 
-def extract_to_bronze(tabela: str, entidade: str) -> None:
+def extract_to_bronze(tabela: str, entidade: str) -> str:
     """Le a tabela inteira do banco de origem e grava como JSON no container bronze."""
     momento = datetime.datetime.now(datetime.timezone.utc)
 
@@ -74,7 +74,7 @@ def extract_to_bronze(tabela: str, entidade: str) -> None:
             conn.close()
     except Exception as e:
         logging.error(f"[{entidade}] Erro ao extrair dados de {FONTE}.{tabela}: {e}")
-        return
+        raise
 
     conteudo = json.dumps(registros, default=_json_default, ensure_ascii=False)
     caminho = _montar_caminho(entidade, momento)
@@ -91,11 +91,12 @@ def extract_to_bronze(tabela: str, entidade: str) -> None:
         logging.error(
             f"[{entidade}] Erro ao gravar no Data Lake ({BRONZE_CONTAINER}/{caminho}): {e}"
         )
-        return
+        raise
 
     logging.info(
         f"[{entidade}] {len(registros)} registro(s) gravado(s) em {BRONZE_CONTAINER}/{caminho}"
     )
+    return f"{BRONZE_CONTAINER}/{caminho}"
 
 
 @app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
@@ -146,3 +147,44 @@ def extract_sla(myTimer: func.TimerRequest) -> None:
 @app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)
 def extract_solicitante(myTimer: func.TimerRequest) -> None:
     extract_to_bronze("solicitante", "solicitantes")
+
+
+# Tabelas de origem e entidades de destino, usadas pela extracao manual via HTTP
+TABELAS = {
+    "analistas": "analista",
+    "categorias": "categoria",
+    "chamados": "chamado",
+    "chamados_sla": "chamado_sla",
+    "chamados_status_historico": "chamado_status_historico",
+    "clientes_organizacao": "cliente_organizacao",
+    "csat_avaliacoes": "csat_avaliacao",
+    "filas": "fila",
+    "slas": "sla",
+    "solicitantes": "solicitante",
+}
+
+
+@app.route(route="extrair_agora", auth_level=func.AuthLevel.FUNCTION)
+def extrair_agora(req: func.HttpRequest) -> func.HttpResponse:
+    """Roda a extracao na hora. Use ?entidade=<nome> para uma so; sem parametro, roda todas."""
+    entidade = req.params.get("entidade")
+    if entidade and entidade not in TABELAS:
+        return func.HttpResponse(
+            f"Entidade desconhecida: {entidade}. Opcoes: {', '.join(TABELAS)}", status_code=400
+        )
+
+    alvos = {entidade: TABELAS[entidade]} if entidade else TABELAS
+    resultados = {}
+    houve_erro = False
+    for nome, tabela in alvos.items():
+        try:
+            resultados[nome] = {"ok": True, "arquivo": extract_to_bronze(tabela, nome)}
+        except Exception as e:
+            houve_erro = True
+            resultados[nome] = {"ok": False, "erro": str(e)}
+
+    return func.HttpResponse(
+        json.dumps(resultados, ensure_ascii=False, indent=2),
+        status_code=500 if houve_erro else 200,
+        mimetype="application/json",
+    )
