@@ -69,7 +69,7 @@ def extract_to_bronze(tabela: str, entidade: str) -> None:
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM {FONTE}.{tabela}")
             colunas = [col[0] for col in cursor.description]
-            registros = [dict(zip(colunas, row)) for row in cursor.fetchall()]
+            registros = [dict(zip(colunas, row, strict=False)) for row in cursor.fetchall()]
         finally:
             conn.close()
     except Exception as e:
@@ -88,10 +88,14 @@ def extract_to_bronze(tabela: str, entidade: str) -> None:
             content_settings=ContentSettings(content_type="application/json"),
         )
     except Exception as e:
-        logging.error(f"[{entidade}] Erro ao gravar no Data Lake ({BRONZE_CONTAINER}/{caminho}): {e}")
+        logging.error(
+            f"[{entidade}] Erro ao gravar no Data Lake ({BRONZE_CONTAINER}/{caminho}): {e}"
+        )
         return
 
-    logging.info(f"[{entidade}] {len(registros)} registro(s) gravado(s) em {BRONZE_CONTAINER}/{caminho}")
+    logging.info(
+        f"[{entidade}] {len(registros)} registro(s) gravado(s) em {BRONZE_CONTAINER}/{caminho}"
+    )
 
 
 @app.timer_trigger(schedule=SCHEDULE, arg_name="myTimer", run_on_startup=False, use_monitor=False)

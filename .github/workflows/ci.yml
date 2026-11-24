@@ -3,23 +3,37 @@ name: CI/CD
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
   validar:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 --version
-      - run: python3 -m py_compile function_app.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Instalar ferramentas de qualidade
+        run: pip install ruff==0.16.9 black==26.5.1 isort==9.0.2
+      - name: Compilar
+        run: python -m py_compile function_app.py */__init__.py
+      - name: Linting (ruff)
+        run: ruff check .
+      - name: Formatacao (black)
+        run: black --check --diff .
+      - name: Ordem dos imports (isort)
+        run: isort --check-only --diff .
 
   deploy:
     needs: validar
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
     env:
-      AZURE_FUNCTIONAPP_NAME: 'FuncApp-TAPRA-OTAVIO'
+      AZURE_FUNCTIONAPP_NAME: 'FuncApp-TAPRA-JOAO-OTAVIO-VICTOR'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,4 +48,5 @@ jobs:
         with:
           app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
           package: .
+          sku: flexconsumption
           remote-build: true
