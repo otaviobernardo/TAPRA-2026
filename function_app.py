@@ -188,3 +188,131 @@ def extrair_agora(req: func.HttpRequest) -> func.HttpResponse:
         status_code=500 if houve_erro else 200,
         mimetype="application/json",
     )
+
+
+# ---------------------------------------------------------------------------
+# Carga do banco de destino (bronze -> dbo), uma vez ao dia
+# ---------------------------------------------------------------------------
+
+# Credenciais do banco de destino, definidas nas variaveis de ambiente da Function App
+dest_host = os.getenv("DEST_HOST")
+dest_database = os.getenv("DEST_DATABASE")
+dest_user = os.getenv("DEST_USER")
+dest_password = os.getenv("DEST_PASSWORD")
+
+conn_str_destino = (
+    "DRIVER={ODBC Driver 18 for SQL Server};"
+    f"SERVER=tcp:{dest_host},1433;"
+    f"DATABASE={dest_database};"
+    f"UID={dest_user};"
+    f"PWD={dest_password};"
+    "Encrypt=yes;"
+    "TrustServerCertificate=no;"
+    "Connection Timeout=60;"
+)
+
+# Todo dia as 06:00 UTC (03:00 de Brasilia)
+SCHEDULE_CARGA = "0 0 6 * * *"
+
+# Ordem de carga respeitando as chaves estrangeiras: pais antes dos filhos.
+# (entidade no bronze, tabela no destino)
+ORDEM_CARGA = [
+    ("filas", "fila"),
+    ("slas", "sla"),
+    ("categorias", "categoria"),
+    ("clientes_organizacao", "cliente_organizacao"),
+    ("analistas", "analista"),
+    ("solicitantes", "solicitante"),
+    ("chamados", "chamado"),
+    ("chamados_sla", "chamado_sla"),
+    ("chamados_status_historico", "chamado_status_historico"),
+    ("csat_avaliacoes", "csat_avaliacao"),
+]
+
+
+def _ler_json_mais_recente(container_client, entidade: str) -> tuple[str, list]:
+    """Retorna (caminho, registros) do JSON mais recente da entidade no bronze."""
+    nomes = [b.name for b in container_client.list_blobs(name_starts_with=f"{FONTE}/{entidade}/")]
+    if not nomes:
+        raise RuntimeError(f"Nenhum arquivo encontrado em {BRONZE_CONTAINER}/{FONTE}/{entidade}/")
+    # O caminho tem ano=/mes=/dia= e o timestamp no nome, entao a ordem alfabetica e cronologica
+    caminho = max(nomes)
+    conteudo = container_client.download_blob(caminho).readall()
+    return caminho, json.loads(conteudo)
+
+
+def _converter(coluna: str, valor):
+    """Converte as datas ISO do JSON de volta para datetime (colunas dt_*)."""
+    if isinstance(valor, str) and coluna.startswith("dt_"):
+        return datetime.datetime.fromisoformat(valor)
+    return valor
+
+
+def carregar_destino() -> dict:
+    """Recarrega todas as tabelas do destino a partir do bronze, numa unica transacao."""
+    service = BlobServiceClient.from_connection_string(DATALAKE_CONNECTION_STRING)
+    container = service.get_container_client(BRONZE_CONTAINER)
+
+    dados = {}
+    for entidade, tabela in ORDEM_CARGA:
+        caminho, registros = _ler_json_mais_recente(container, entidade)
+        logging.info(f"[carga] {tabela}: {len(registros)} registro(s) lidos de {caminho}")
+        dados[tabela] = registros
+
+    conn = pyodbc.connect(conn_str_destino, autocommit=False)
+    try:
+        cursor = conn.cursor()
+        cursor.fast_executemany = True
+
+        # Apaga dos filhos para os pais, para nao violar as chaves estrangeiras
+        for _, tabela in reversed(ORDEM_CARGA):
+            cursor.execute(f"DELETE FROM dbo.{tabela}")
+
+        # Insere dos pais para os filhos
+        resultado = {}
+        for _, tabela in ORDEM_CARGA:
+            registros = dados[tabela]
+            if registros:
+                colunas = list(registros[0].keys())
+                sql = (
+                    f"INSERT INTO dbo.{tabela} ({', '.join(colunas)}) "
+                    f"VALUES ({', '.join('?' for _ in colunas)})"
+                )
+                linhas = [[_converter(c, r.get(c)) for c in colunas] for r in registros]
+                cursor.executemany(sql, linhas)
+            resultado[tabela] = len(registros)
+            logging.info(f"[carga] {tabela}: {len(registros)} linha(s) inserida(s)")
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"[carga] Erro ao carregar o banco de destino, transacao desfeita: {e}")
+        raise
+    finally:
+        conn.close()
+
+    return resultado
+
+
+@app.timer_trigger(
+    schedule=SCHEDULE_CARGA, arg_name="myTimer", run_on_startup=False, use_monitor=False
+)
+def load_destino(myTimer: func.TimerRequest) -> None:
+    carregar_destino()
+
+
+@app.route(route="carregar_agora", auth_level=func.AuthLevel.FUNCTION)
+def carregar_agora(req: func.HttpRequest) -> func.HttpResponse:
+    """Roda a carga do destino na hora e devolve as linhas inseridas por tabela."""
+    try:
+        resultado = {"ok": True, "linhas_inseridas": carregar_destino()}
+        status = 200
+    except Exception as e:
+        resultado = {"ok": False, "erro": str(e)}
+        status = 500
+
+    return func.HttpResponse(
+        json.dumps(resultado, ensure_ascii=False, indent=2),
+        status_code=status,
+        mimetype="application/json",
+    )
