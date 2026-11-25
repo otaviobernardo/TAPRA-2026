@@ -6,9 +6,13 @@
     "HTTP_FUNCTION_URL": "http://localhost:7071/api/HttpTriggerEcho",
     "HOST": "<servidor>.database.windows.net",
     "DATABASE": "<banco>",
-    "USER": "<usuario>",
+    "SQL_USER": "<usuario>",
     "PASSWORD": "<senha>",
     "DATALAKE_CONNECTION_STRING": "DefaultEndpointsProtocol=https;AccountName=<conta>;AccountKey=<chave>;EndpointSuffix=core.windows.net",
-    "BRONZE_CONTAINER": "bronze"
+    "BRONZE_CONTAINER": "bronze",
+    "DEST_HOST": "<servidor-destino>.database.windows.net",
+    "DEST_DATABASE": "<banco-destino>",
+    "DEST_USER": "<usuario-destino>",
+    "DEST_PASSWORD": "<senha-destino>"
   }
 }
