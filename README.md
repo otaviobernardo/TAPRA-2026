@@ -37,7 +37,37 @@ Power BI: relatório "Painel Indicadores TAPRA"
 O painel lê as views de [`sql/views_indicadores.sql`](sql/views_indicadores.sql) no banco de
 destino e é atualizado todo dia, depois da carga.
 
-<!-- PRINTS_DO_PAINEL -->
+### 1. Visão geral
+
+KPIs (total de chamados, backlog, % resolvidos, tempo médio de resolução, % dentro do SLA e CSAT
+médio), chamados abertos x resolvidos por mês e chamados por status.
+
+![Visão geral](docs/img/01-visao-geral.png)
+
+### 2. Distribuição dos chamados
+
+Chamados por tipo, prioridade, cliente, categoria e fila.
+
+![Distribuição dos chamados](docs/img/02-distribuicao.png)
+
+### 3. Analistas
+
+Volume de chamados, nível e CSAT por analista.
+
+![Analistas](docs/img/03-analistas.png)
+
+### 4. SLA, tempos e CSAT
+
+Cumprimento de SLA, tempo de resolução, tempo médio em cada status e distribuição das notas de
+CSAT.
+
+![SLA, tempos e CSAT](docs/img/04-sla-csat.png)
+
+### 5. Detalhamento
+
+Filtros por prioridade, status, fila e analista, com a lista de chamados.
+
+![Detalhamento](docs/img/05-detalhamento.png)
 
 Indicadores disponíveis nas views:
 
